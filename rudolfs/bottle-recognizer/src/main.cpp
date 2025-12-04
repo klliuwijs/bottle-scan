@@ -40,7 +40,7 @@ int main(int argc, char** argv)
         {
             //const auto codec = cv::VideoWriter::fourcc('h', 'e', 'v', '1');
             const auto codec = cv::VideoWriter::fourcc('a', 'v', 'c', '1');
-            video_writer = std::make_unique<cv::VideoWriter>("/Users/rudolfs/output.mp4", codec, 30, cv::Size(frame.cols, frame.rows));
+            video_writer = std::make_unique<cv::VideoWriter>("output.mp4", codec, 30, cv::Size(frame.cols, frame.rows));
             if (!video_writer->isOpened())
             {
                 std::cerr << "failed to open video writer" << std::endl;
