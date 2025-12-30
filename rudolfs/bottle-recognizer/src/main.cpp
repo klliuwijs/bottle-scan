@@ -8,48 +8,106 @@
 #define USE_COLOR_FILTER 1
 #define SHOW_DEBUG 0  // Show intermediate processing steps
 
+// Global pause state for button callback
+int g_pause_video = 0;
+
+void pauseButtonCallback(int state, void* userData)
+{
+    g_pause_video = state;
+    std::cout << (state ? "Video PAUSED - Press SPACE to resume" : "Video PLAYING") << std::endl;
+}
+
 int main(int argc, char** argv) 
 {
-    if (argc != 2)
-    {
-        std::cerr << "usage: " << argv[0] << " <video path>" << std::endl;
-        return EXIT_FAILURE;
-    }
-
-    const std::string video_path = argv[1];
-    cv::VideoCapture video_capture(video_path);
-    if (!video_capture.isOpened())
-    {
-        std::cerr << "failed to open video " << video_path << std::endl;
-        return EXIT_FAILURE;
-    }
-
-    std::unique_ptr<cv::VideoWriter> video_writer;
-
-    size_t i = 0;
+    const std::string initial_video = (argc == 2) ? argv[1] : "";
+    
+    // Create window for trackbars
+    cv::namedWindow("Parameters", cv::WINDOW_NORMAL);
+    
+    // HSV color range parameters (adjustable with trackbars)
+    int lower_hue = 100, lower_sat = 50, lower_val = 50;
+    int upper_hue = 130, upper_sat = 255, upper_val = 255;
+    int min_area = 40, max_area = 50000;
+    int pause_toggle = 0;
+    int speed_slider = 10;  // 10 = 1.0x speed (range 1-20 = 0.1x to 2.0x)
+    
+    cv::createTrackbar("Lower Hue", "Parameters", &lower_hue, 180);
+    cv::createTrackbar("Lower Sat", "Parameters", &lower_sat, 255);
+    cv::createTrackbar("Lower Val", "Parameters", &lower_val, 255);
+    cv::createTrackbar("Upper Hue", "Parameters", &upper_hue, 180);
+    cv::createTrackbar("Upper Sat", "Parameters", &upper_sat, 255);
+    cv::createTrackbar("Upper Val", "Parameters", &upper_val, 255);
+    cv::createTrackbar("Min Area", "Parameters", &min_area, 10000);
+    cv::createTrackbar("Max Area", "Parameters", &max_area, 100000);
+    cv::createTrackbar("Video Speed (0.1x - 2.0x)", "Parameters", &speed_slider, 20);
+    cv::createTrackbar("PAUSE (toggle with SPACE key)", "Parameters", &pause_toggle, 1, pauseButtonCallback);
+    
+    std::string current_video = initial_video;
+    
     while (true)
     {
-        cv::Mat frame;
-        video_capture >> frame;
-        if (frame.empty())
+        if (current_video.empty())
         {
-            break;
+            std::cout << "Enter video file path (or 'quit' to exit): ";
+            std::getline(std::cin, current_video);
+            if (current_video == "quit" || current_video == "q")
+                break;
         }
         
-        if (!video_writer)
+        cv::VideoCapture video_capture(current_video);
+        if (!video_capture.isOpened())
         {
-            //const auto codec = cv::VideoWriter::fourcc('h', 'e', 'v', '1');
-            const auto codec = cv::VideoWriter::fourcc('a', 'v', 'c', '1');
-            video_writer = std::make_unique<cv::VideoWriter>("output.mp4", codec, 30, cv::Size(frame.cols, frame.rows));
-            if (!video_writer->isOpened())
-            {
-                std::cerr << "failed to open video writer" << std::endl;
-                return EXIT_FAILURE;
-            }
+            std::cerr << "failed to open video: " << current_video << std::endl;
+            current_video.clear();
+            continue;
         }
+        
+        std::cout << "Playing: " << current_video << std::endl;
+        std::cout << "Controls:" << std::endl;
+        std::cout << "  SPACE - Pause/Resume" << std::endl;
+        std::cout << "  'r' - Restart video from beginning" << std::endl;
+        std::cout << "  'l' - Load new video file" << std::endl;
+        std::cout << "  ESC or 'q' - Quit application" << std::endl;
+        
+        bool load_new_video = false;
+        while (true)
+        {
+            cv::Mat frame;
+            
+            // Skip frame if not paused
+            if (pause_toggle == 0)
+            {
+                video_capture >> frame;
+                if (frame.empty())
+                {
+                    std::cout << "Video finished. Load another? (Enter path or 'quit'): ";
+                    current_video.clear();
+                    break;
+                }
+            }
+            else
+            {
+                // Stay on same frame when paused
+                if (!frame.empty() || frame.empty())
+                {
+                    // Just refresh display
+                }
+            }
+            
+            if (frame.empty() && pause_toggle == 0)
+                break;
+            
+            // If we're paused, keep showing last frame
+            static cv::Mat last_frame;
+            if (!frame.empty())
+                last_frame = frame.clone();
+            else if (!last_frame.empty())
+                frame = last_frame.clone();
+            else
+                continue;
 
-        cv::Mat display = frame.clone();
-        size_t bottle_count = 0;
+            cv::Mat display = frame.clone();
+            size_t bottle_count = 0;
 
 #if defined(USE_COLOR_FILTER) && USE_COLOR_FILTER == 1
         // ===== Method 3: Color-Based Filtering (Best for known cap colors) =====
@@ -58,12 +116,12 @@ int main(int argc, char** argv)
         cv::Mat hsv;
         cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
         
-        // Define range for blue color in HSV
+        // Define range for blue color in HSV (using trackbar values)
         // Hue: 100-130 (blue range in OpenCV's 0-180 scale)
         // Saturation: 50-255 (ignore very desaturated/grayish blues)
         // Value: 50-255 (ignore very dark regions)
-        cv::Scalar lower_blue(100, 50, 50);   // Adjust these values to match your bottle cap blue
-        cv::Scalar upper_blue(130, 255, 255);
+        cv::Scalar lower_blue(lower_hue, lower_sat, lower_val);
+        cv::Scalar upper_blue(upper_hue, upper_sat, upper_val);
         
         // Create mask for blue regions
         cv::Mat blue_mask;
@@ -93,8 +151,8 @@ int main(int argc, char** argv)
         {
             double area = cv::contourArea(contour);
             
-            // Filter by area (adjust based on your bottle cap size in pixels)
-            if (area < 40 || area > 50000)
+            // Filter by area (using trackbar values)
+            if (area < min_area || area > max_area)
                 continue;
             
             double perimeter = cv::arcLength(contour, true);
@@ -187,17 +245,34 @@ int main(int argc, char** argv)
         
 #endif
         
-#if 0
-        std::string title = "frame " + std::to_string(i++) + " - Blue Bottles: " + std::to_string(bottle_count);
-        cv::imshow(title.c_str(), display);
+        // Display live window with detected bottles
+        cv::imshow("Bottle Detection", display);
 
-        int key = cv::waitKey();
+        // Calculate wait time based on speed slider (0.1x to 2.0x)
+        // speed_slider: 1-20, where 10 = 1.0x speed (normal)
+        // Normal delay = 30ms, so: delay = 300 / speed_slider
+        int delay = std::max(1, 300 / speed_slider);
+        
+        int key = cv::waitKey(delay);  // Adaptive delay based on speed
         if (key == 27 || key == 'q')  // ESC or 'q' to quit
+            return EXIT_SUCCESS;
+        else if (key == ' ')  // SPACE to toggle pause
+        {
+            pause_toggle = 1 - pause_toggle;
+            std::cout << (pause_toggle ? "Video PAUSED" : "Video PLAYING") << std::endl;
+        }
+        else if (key == 'r' || key == 'R')  // 'r' to restart video
+        {
+            video_capture.set(cv::CAP_PROP_POS_FRAMES, 0);
+            std::cout << "Video restarted from beginning" << std::endl;
+        }
+        else if (key == 'l' || key == 'L')  // 'l' to load new video
+        {
+            current_video.clear();
             break;
-#endif
-
-        video_writer->write(display);
-    }
+        }
+        }  // End of inner while loop
+    }  // End of outer while loop
 
     return EXIT_SUCCESS;
 }
